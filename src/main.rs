@@ -1,12 +1,31 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
+
 use anyhow::Context;
 
-fn is_buck2_crate(s: &str) -> bool {
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
+struct Crate {
+    folder: String,
+    name: String,
+}
+
+impl Crate {
+    fn path(&self) -> PathBuf {
+        Path::new(&self.folder).join(&self.name)
+    }
+
+    fn cargo_toml(&self) -> PathBuf {
+        self.path().join("Cargo.toml")
+    }
+}
+
+fn is_interesting_crate(s: &str) -> bool {
     // s.starts_with("buck2_") || s == "cli"
     // true
-    s != "superconsole"
+    s != "superconsole" && !s.ends_with("_tests")
 }
 
 struct GraphRef<'a> {
@@ -40,7 +59,10 @@ impl<'a> GraphRef<'a> {
     }
 
     fn first_order_deps(&self, cr: &str) -> &'a BTreeSet<&'a str> {
-        &self.graph.get(cr).unwrap_or_else(|| panic!("{} not found", cr))
+        &self
+            .graph
+            .get(cr)
+            .unwrap_or_else(|| panic!("{} not found", cr))
     }
 
     fn deps_reachable_via_first_order_deps(&self, cr: &str) -> BTreeSet<&'a str> {
@@ -54,7 +76,11 @@ impl<'a> GraphRef<'a> {
 
     fn min_necessary_deps(&self, cr: &str) -> BTreeSet<&'a str> {
         let reachable = self.deps_reachable_via_first_order_deps(cr);
-        self.first_order_deps(cr).into_iter().copied().filter(|d| !reachable.contains(d)).collect()
+        self.first_order_deps(cr)
+            .into_iter()
+            .copied()
+            .filter(|d| !reachable.contains(d))
+            .collect()
     }
 
     fn graph_leading_to(&self, cr: &str) -> BTreeMap<&'a str, BTreeSet<&'a str>> {
@@ -64,7 +90,12 @@ impl<'a> GraphRef<'a> {
             if !crates.contains(cr) {
                 continue;
             }
-            let deps = self.first_order_deps(cr).into_iter().copied().filter(|d| crates.contains(d)).collect();
+            let deps = self
+                .first_order_deps(cr)
+                .into_iter()
+                .copied()
+                .filter(|d| crates.contains(d))
+                .collect();
             graph.insert(cr, deps);
         }
         graph
@@ -87,39 +118,59 @@ impl<'a> GraphRef<'a> {
     }
 }
 
+fn read_dir(path: impl AsRef<Path>) -> anyhow::Result<fs::ReadDir> {
+    fs::read_dir(path.as_ref()).with_context(|| format!("read_dir {}", path.as_ref().display()))
+}
+
+fn read_to_string(path: impl AsRef<Path>) -> anyhow::Result<String> {
+    fs::read_to_string(path.as_ref())
+        .with_context(|| format!("read_to_string {}", path.as_ref().display()))
+}
+
 fn main() -> anyhow::Result<()> {
-    let mut crates: Vec<String> = Vec::new();
-    for e in fs::read_dir(".")? {
-        let e = e?;
-        let dir_name = e.file_name();
-        let dir_name = dir_name.to_str().context("UTF-8")?;
-        if !is_buck2_crate(dir_name) {
-            continue;
+    let mut crates: Vec<Crate> = Vec::new();
+    for folder in [".", "app"] {
+        for e in read_dir(folder)? {
+            let e = e?;
+            let dir_name = e.file_name();
+            let dir_name = dir_name.to_str().context("UTF-8")?;
+            if !is_interesting_crate(dir_name) {
+                continue;
+            }
+            if !Path::new(folder).join(dir_name).join("Cargo.toml").exists() {
+                continue;
+            }
+            crates.push(Crate {
+                folder: folder.to_owned(),
+                name: dir_name.to_string(),
+            });
         }
-        if !Path::new(dir_name).join("Cargo.toml").exists() {
-            continue;
-        }
-        crates.push(dir_name.to_string());
     }
     crates.sort();
 
-    let mut deps_by_crate: BTreeMap<&str, BTreeSet<&str>> = crates.iter().map(|cr| (cr.as_str(), BTreeSet::new())).collect();
+    let mut deps_by_crate: BTreeMap<&str, BTreeSet<&str>> = crates
+        .iter()
+        .map(|cr| (cr.name.as_str(), BTreeSet::new()))
+        .collect();
 
     for cr in &crates {
-        for line in fs::read_to_string(Path::new(cr).join("Cargo.toml"))?.lines() {
+        for line in read_to_string(cr.cargo_toml())?.lines() {
             match line.split_once("=") {
                 Some((dep, _)) => {
                     let dep = dep.trim();
-                    let dep = crates.iter().find(|c| &dep == c);
+                    let dep = crates.iter().find(|c| dep == c.name);
                     let dep = match dep {
                         Some(dep) => dep,
                         None => continue,
                     };
-                    deps_by_crate.get_mut(cr.as_str()).unwrap().insert(dep);
+                    deps_by_crate
+                        .get_mut(cr.name.as_str())
+                        .unwrap()
+                        .insert(&dep.name);
                 }
                 None => continue,
             }
-        };
+        }
     }
 
     let graph = GraphRef {
@@ -127,14 +178,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let graph = graph.graph_leading_to("cli");
-    let graph = GraphRef {
-        graph: &graph,
-    };
+    let graph = GraphRef { graph: &graph };
 
     let graph = graph.min_graph();
-    let graph = GraphRef {
-        graph: &graph,
-    };
+    let graph = GraphRef { graph: &graph };
 
     graph.print();
 

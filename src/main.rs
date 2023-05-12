@@ -45,8 +45,12 @@ impl<'a> GraphRef<'a> {
         all_deps
     }
 
-    fn all_deps_including_self(&self, cr: &str) -> BTreeSet<&'a str> {
-        let cr = self.graph.keys().find(|k| **k == cr).unwrap();
+    fn all_deps_including_self(&self, cr: &str) -> anyhow::Result<BTreeSet<&'a str>> {
+        let cr = self
+            .graph
+            .keys()
+            .find(|k| **k == cr)
+            .with_context(|| format!("crate not found: {}", cr))?;
 
         let mut all_deps = BTreeSet::new();
         let mut stack: Vec<&str> = vec![cr];
@@ -55,7 +59,7 @@ impl<'a> GraphRef<'a> {
                 stack.extend(self.first_order_deps(d));
             }
         }
-        all_deps
+        Ok(all_deps)
     }
 
     fn first_order_deps(&self, cr: &str) -> &'a BTreeSet<&'a str> {
@@ -83,8 +87,8 @@ impl<'a> GraphRef<'a> {
             .collect()
     }
 
-    fn graph_leading_to(&self, cr: &str) -> BTreeMap<&'a str, BTreeSet<&'a str>> {
-        let crates = self.all_deps_including_self(cr);
+    fn graph_leading_to(&self, cr: &str) -> anyhow::Result<BTreeMap<&'a str, BTreeSet<&'a str>>> {
+        let crates = self.all_deps_including_self(cr)?;
         let mut graph: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for cr in &crates {
             if !crates.contains(cr) {
@@ -98,7 +102,7 @@ impl<'a> GraphRef<'a> {
                 .collect();
             graph.insert(cr, deps);
         }
-        graph
+        Ok(graph)
     }
 
     fn min_graph(&self) -> BTreeMap<&'a str, BTreeSet<&'a str>> {
@@ -177,7 +181,7 @@ fn main() -> anyhow::Result<()> {
         graph: &deps_by_crate,
     };
 
-    let graph = graph.graph_leading_to("cli");
+    let graph = graph.graph_leading_to("buck2")?;
     let graph = GraphRef { graph: &graph };
 
     let graph = graph.min_graph();

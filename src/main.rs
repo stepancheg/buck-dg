@@ -25,7 +25,7 @@ impl Crate {
 fn is_interesting_crate(s: &str) -> bool {
     // s.starts_with("buck2_") || s == "cli"
     // true
-    s != "superconsole" && !s.ends_with("_tests")
+    s != "superconsole" && !s.ends_with("_tests") && !s.ends_with("_derive")
 }
 
 struct GraphRef<'a> {
@@ -133,7 +133,7 @@ fn read_to_string(path: impl AsRef<Path>) -> anyhow::Result<String> {
 
 fn main() -> anyhow::Result<()> {
     let mut crates: Vec<Crate> = Vec::new();
-    for folder in [".", "app"] {
+    for folder in [".", "app", "dice", "starlark-rust"] {
         for e in read_dir(folder)? {
             let e = e?;
             let dir_name = e.file_name();
